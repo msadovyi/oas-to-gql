@@ -1,0 +1,3 @@
+.vscode
+oas/*/node_modules
+.env
