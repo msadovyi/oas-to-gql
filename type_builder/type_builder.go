@@ -8,6 +8,8 @@ import (
 	"openapi-to-graphql/utils"
 )
 
+var defs = make(map[string]*DataDefinition)
+
 type SchemaNames struct {
 	FromRef    string
 	FromSchema string
@@ -15,19 +17,19 @@ type SchemaNames struct {
 }
 
 type DataDefinition struct {
-	Path              string
-	OAS               *openapi3.T
-	SchemaRef         *openapi3.SchemaRef
-	Schema            *openapi3.Schema
-	Names             SchemaNames
-	PreferredName     string
-	Type              string
-	TargetGraphqlType int
-	Required          bool
-	ObjectDefinitions map[string]*DataDefinition
-	ListDefinitions   *DataDefinition
-	GraphqlType       graphql.Type
-	InputGraphqlType  graphql.Type
+	Path                        string
+	OAS                         *openapi3.T
+	SchemaRef                   *openapi3.SchemaRef
+	Schema                      *openapi3.Schema
+	Names                       SchemaNames
+	PreferredName               string
+	Type                        string
+	TargetGraphqlType           int
+	Required                    bool
+	ObjectPropertiesDefinitions map[string]*DataDefinition
+	ListItemDefinitions         *DataDefinition
+	GraphqlType                 graphql.Type
+	InputGraphqlType            graphql.Type
 }
 
 type UsedOT map[string]graphql.Type // graphql.Type can be field of DataDefinition struct schema, datadefs, subdefs and prefered gql type name
@@ -39,20 +41,20 @@ func setUsedOT(def *DataDefinition) {
 	usedOT[def.InputGraphqlType.Name()] = def.InputGraphqlType
 }
 
-func AssignGraphQLTypeToDataDefinition(def *DataDefinition) {
+func assignGraphQLTypeToDefinition(def *DataDefinition) {
 	if usedOT[def.PreferredName] != nil {
 		def.GraphqlType = usedOT[def.PreferredName]
 		def.InputGraphqlType = usedOT[def.PreferredName+"Input"]
 	} else if def.TargetGraphqlType == types.List {
-		AssignGraphQLTypeToDataDefinition(def.ListDefinitions)
+		assignGraphQLTypeToDefinition(def.ListItemDefinitions)
 
-		def.GraphqlType = graphql.NewList(def.ListDefinitions.GraphqlType)
-		def.InputGraphqlType = graphql.NewList(def.ListDefinitions.InputGraphqlType)
+		def.GraphqlType = graphql.NewList(def.ListItemDefinitions.GraphqlType)
+		def.InputGraphqlType = graphql.NewList(def.ListItemDefinitions.InputGraphqlType)
 
-		setUsedOT(def.ListDefinitions)
+		setUsedOT(def.ListItemDefinitions)
 	} else if def.TargetGraphqlType == types.Object {
-		def.GraphqlType = createOt(def)
-		def.InputGraphqlType = createInputOt(def)
+		def.GraphqlType = assignOt(def)
+		def.InputGraphqlType = assignInputOt(def)
 
 		setUsedOT(def)
 	} else if def.TargetGraphqlType == types.String {
@@ -78,6 +80,10 @@ func AssignGraphQLTypeToDataDefinition(def *DataDefinition) {
 func CreateDataDefinition(oas *openapi3.T, schemaRef *openapi3.SchemaRef, schemaNames SchemaNames, path string, required bool) *DataDefinition {
 	preferredName := GetPreferredName(schemaNames)
 
+	if defs[preferredName] != nil {
+		return defs[preferredName]
+	}
+
 	def := DataDefinition{
 		Path:              path,
 		OAS:               oas,
@@ -90,12 +96,14 @@ func CreateDataDefinition(oas *openapi3.T, schemaRef *openapi3.SchemaRef, schema
 		Type:              schemaRef.Value.Type,
 	}
 
+	defs[preferredName] = &def
+
 	if def.TargetGraphqlType == types.List {
 		names := SchemaNames{
 			FromRef: utils.GetRefName(schemaRef.Value.Items.Ref),
 		}
 		subDef := CreateDataDefinition(oas, schemaRef.Value.Items, names, path, false)
-		def.ListDefinitions = subDef
+		def.ListItemDefinitions = subDef
 	} else if def.TargetGraphqlType == types.Object {
 		objectDefinitions := make(map[string]*DataDefinition)
 		schemas := make([]*openapi3.SchemaRef, 0)
@@ -111,7 +119,8 @@ func CreateDataDefinition(oas *openapi3.T, schemaRef *openapi3.SchemaRef, schema
 		for _, schema := range schemas {
 			for fieldName, value := range schema.Value.Properties {
 				names := SchemaNames{
-					FromSchema: fieldName,
+					FromRef:    utils.GetRefName(value.Ref),
+					FromSchema: value.Value.Title,
 				}
 				required := utils.Contains(schemaRef.Value.Required, fieldName)
 				subDefinition := CreateDataDefinition(oas, value, names, path, required)
@@ -119,10 +128,10 @@ func CreateDataDefinition(oas *openapi3.T, schemaRef *openapi3.SchemaRef, schema
 			}
 		}
 
-		def.ObjectDefinitions = objectDefinitions
+		def.ObjectPropertiesDefinitions = objectDefinitions
 	}
 
-	AssignGraphQLTypeToDataDefinition(&def)
+	assignGraphQLTypeToDefinition(&def)
 
 	return &def
 }
@@ -146,34 +155,35 @@ func getTargetGraphqlType(schema *openapi3.Schema) int {
 	return targetType
 }
 
-func createOt(def *DataDefinition) graphql.Type {
-	fields := graphql.Fields{}
-
-	for fieldName, p := range def.ObjectDefinitions {
-		AssignGraphQLTypeToDataDefinition(p)
-
-		fields[fieldName] = &graphql.Field{Type: p.GraphqlType, Name: fieldName}
-	}
-
+func assignOt(def *DataDefinition) graphql.Type {
 	return graphql.NewObject(
 		graphql.ObjectConfig{
-			Name:   def.PreferredName,
-			Fields: fields,
+			Name: def.PreferredName,
+			Fields: graphql.FieldsThunk(func() graphql.Fields {
+				fields := graphql.Fields{}
+				for fieldName, p := range def.ObjectPropertiesDefinitions {
+					assignGraphQLTypeToDefinition(p)
+					fields[fieldName] = &graphql.Field{Type: p.GraphqlType, Name: fieldName}
+				}
+				return fields
+			}),
 		},
 	)
 }
 
-func createInputOt(def *DataDefinition) graphql.Type {
-	fields := graphql.InputObjectConfigFieldMap{}
-
-	for fieldName, p := range def.ObjectDefinitions {
-		fields[fieldName] = &graphql.InputObjectFieldConfig{Type: p.InputGraphqlType}
-	}
-
+func assignInputOt(def *DataDefinition) graphql.Type {
 	return graphql.NewInputObject(
 		graphql.InputObjectConfig{
-			Name:   def.PreferredName + "Input",
-			Fields: fields,
+			Name: def.PreferredName + "Input",
+			Fields: graphql.InputObjectConfigFieldMapThunk(
+				func() graphql.InputObjectConfigFieldMap {
+					fields := graphql.InputObjectConfigFieldMap{}
+					for fieldName, p := range def.ObjectPropertiesDefinitions {
+						fields[fieldName] = &graphql.InputObjectFieldConfig{Type: p.InputGraphqlType}
+					}
+					return fields
+				},
+			),
 		},
 	)
 }

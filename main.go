@@ -72,7 +72,7 @@ func translateToSchemaConfig(public *openapi3.T) graphql.SchemaConfig {
 			}
 			operationName := operation.OperationID
 			if len(operationName) == 0 {
-				operationName = utils.GenerateOperationId(method, path)
+				operationName = utils.InferResourceNameFromPath(path)
 			}
 			operationName = utils.ToPascalCase(operationName)
 
@@ -111,7 +111,15 @@ func translateToSchemaConfig(public *openapi3.T) graphql.SchemaConfig {
 				names := typebuilder.SchemaNames{
 					FromSchema: p.Name,
 				}
-				def := typebuilder.CreateDataDefinition(public, p.Schema, names, path, p.Required)
+				schema := p.Schema
+				if schema == nil {
+					schema = p.Content["application/json"].Schema
+				}
+				if schema == nil {
+					log.Print("Skipping " + operationName + "." + "Parameter schema not found")
+					continue
+				}
+				def := typebuilder.CreateDataDefinition(public, schema, names, path, p.Required)
 
 				args[name] = &graphql.ArgumentConfig{
 					Type:        def.InputGraphqlType,
@@ -220,9 +228,19 @@ func getResolver(path string, httpMethod string, argToParam map[string]*openapi3
 		if err != nil {
 			return nil, err
 		}
-		var data interface{} // also could be a string, have to parse response schema and try every case
+		var jsonData interface{}
 
-		json.Unmarshal(responseBody, &data)
+		json.Unmarshal(responseBody, &jsonData)
+
+		text := string(responseBody) // have to check response header
+
+		var data interface{}
+
+		if jsonData != nil {
+			data = jsonData
+		} else {
+			data = text
+		}
 
 		if response.StatusCode >= 400 {
 			err := fmt.Errorf("StatusCode: %v. Status: %v. Response body: %v", response.StatusCode, response.Status, data)
@@ -249,7 +267,13 @@ func getResponseContent(
 	response openapi3.ResponseRef,
 ) (openapi3.MediaType, error) {
 	for name, content := range response.Value.Content {
-		if name == "application/json" && content != nil { // also can be xml, etc..
+		if name == "application/json" && content != nil {
+			return *content, nil
+		}
+		if name == "text/plain" && content != nil {
+			return *content, nil
+		}
+		if name == "text/html" && content != nil {
 			return *content, nil
 		}
 	}

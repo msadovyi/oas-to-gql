@@ -83,6 +83,20 @@ app.post('/pets', function (req, res) {
   res.json(pet);
 })
 
+app.get('/nestedReferenceInParameter', function (req, res) {
+  const getNames = (russianDoll, names = []) => {
+    if (russianDoll.name) {
+      names.push(russianDoll.name)
+    }
+    if (russianDoll.nestedDoll) {
+      getNames(russianDoll.nestedDoll, names)
+    }
+    return names
+  }
+
+  res.send(`Nested dolls name: ${getNames(req.query.russianDoll)}`)
+})
+
 app.listen(3000, function () {
   console.log('Pet API listening http://localhost:3000')
 })
