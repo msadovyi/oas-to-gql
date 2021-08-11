@@ -2,10 +2,12 @@ package utils
 
 import (
 	"fmt"
+	"log"
 	"regexp"
 	"strconv"
 	"strings"
 
+	pluralize "github.com/gertd/go-pluralize"
 	"github.com/getkin/kin-openapi/openapi3"
 )
 
@@ -24,7 +26,7 @@ func GetRefName(ref string) string {
 	return arr[len(arr)-1]
 }
 
-func ToCamelCase(s string) string {
+func ToPascalCase(s string) string {
 	var g []string
 
 	p := strings.Fields(s)
@@ -96,4 +98,44 @@ func CastToString(s interface{}) string {
 	default:
 		return ""
 	}
+}
+
+func InferResourceNameFromPath(path string) string {
+	pluralizeClient := pluralize.NewClient()
+	parts := strings.Split(path, "/")
+	result := ""
+	openBracket := regexp.MustCompile(`^{`)
+
+	for i, part := range parts {
+		if !openBracket.MatchString(part) {
+			if i+1 < len(parts) && len(parts[i+1]) > 0 && (isIdParam(parts[i+1]) || isSingularParam(part, parts[i+1])) {
+				result += strings.Title(pluralizeClient.Singular(part))
+			} else {
+				result += strings.Title(part)
+			}
+		}
+	}
+	return result
+}
+
+func isIdParam(part string) bool {
+	possibleId := regexp.MustCompile(`\{.*(id|name|key)*\}`)
+	return possibleId.MatchString(part)
+}
+
+func isSingularParam(part string, nextPart string) bool {
+	return "{"+pluralize.NewClient().Singular(part)+"}" == nextPart
+}
+
+func GenerateOperationId(
+	method string,
+	path string,
+) string {
+	reg, err := regexp.Compile("[^a-zA-Z0-9]+")
+	if err != nil {
+		log.Fatal(err)
+	}
+	pathProcessed := reg.ReplaceAllString(path, "")
+
+	return strings.ToLower(method) + ToPascalCase(pathProcessed)
 }

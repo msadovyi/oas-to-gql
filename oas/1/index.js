@@ -37,6 +37,7 @@ app.get('/pets', function (req, res) {
   }
   res.json(petsResponse)
 })
+
 app.get('/pets/:id', function (req, res) {
   pet = pets.find((p) => p.id === req.params.id)
   if (!pet) {
@@ -44,6 +45,22 @@ app.get('/pets/:id', function (req, res) {
   }
   res.json(pet)
 })
+
+app.put('/pets/:id', function (req, res) {
+  const { body, params } = req
+  if (!body || !body.name) {
+    return sendBadUserInput(res, { message: "Pet should have name", body });
+  }
+
+  pet = pets.find((p) => p.id === params.id)
+  if (!pet) {
+    return sendBadUserInput(res, { message: "Pet not found", "id": req.params.id });
+  }
+  pet.name = body.name;
+  pet.tag = body.tag || '';
+  res.json(pet)
+})
+
 app.delete('/pets/:id', function (req, res) {
   const id = req.params.id;
   if (!pets[id]) {
@@ -54,9 +71,10 @@ app.delete('/pets/:id', function (req, res) {
   res.statusCode = 204
   res.end();
 })
+
 app.post('/pets', function (req, res) {
   const { body } = req
-  if (!body || !body.name || !body.tag) {
+  if (!body || !body.name) {
     return sendBadUserInput(res, { message: "Pet should have tag and name", body });
   }
   const pet = { ...body, id: pets.length + 1 };

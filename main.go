@@ -25,7 +25,6 @@ import (
 )
 
 var oasPath = flag.String("path", "oas/1/spec.json", "Path to oas json spec")
-var usedOT = make(typebuilder.UsedOT)
 var client = http.Client{}
 
 func main() {
@@ -71,7 +70,11 @@ func translateToSchemaConfig(public *openapi3.T) graphql.SchemaConfig {
 			if !ok || operation == nil {
 				continue
 			}
-			operationName := utils.ToCamelCase(operation.OperationID)
+			operationName := operation.OperationID
+			if len(operationName) == 0 {
+				operationName = utils.GenerateOperationId(method, path)
+			}
+			operationName = utils.ToPascalCase(operationName)
 
 			httpMethod, err := types.GetHttpMethod(method)
 			if err != nil {
@@ -104,10 +107,14 @@ func translateToSchemaConfig(public *openapi3.T) graphql.SchemaConfig {
 				p := parameter.Value
 				name := p.Name
 				description := p.Description
-				graphqlType := typebuilder.GetGraphQLType(public, p.Schema, usedOT, p.Required, true)
+
+				names := typebuilder.SchemaNames{
+					FromSchema: p.Name,
+				}
+				def := typebuilder.CreateDataDefinition(public, p.Schema, names, path, p.Required)
 
 				args[name] = &graphql.ArgumentConfig{
-					Type:        graphqlType,
+					Type:        def.InputGraphqlType,
 					Description: description,
 				}
 
@@ -122,39 +129,43 @@ func translateToSchemaConfig(public *openapi3.T) graphql.SchemaConfig {
 				required := requestBody.Value.Required
 				content, err := getRequestContent(*requestBody.Value)
 				if err != nil {
-					panic(err)
+					log.Print("Skipping " + operationName + "." + err.Error())
+					continue
 				}
-				graphqlType := typebuilder.GetGraphQLType(public, content.Schema, usedOT, required, true)
 
-				requestBodyArgName, err = utils.Sanitize(graphqlType.Name())
+				schemaNames := typebuilder.SchemaNames{
+					FromSchema: content.Schema.Value.Title,
+					FromRef:    utils.GetRefName(content.Schema.Ref),
+					FromPath:   utils.InferResourceNameFromPath(path),
+				}
+
+				def := typebuilder.CreateDataDefinition(public, content.Schema, schemaNames, path, required)
+
+				requestBodyArgName, err = utils.Sanitize(def.InputGraphqlType.Name())
 				if err != nil {
-					panic(err)
+					log.Print("Skipping " + operationName + "." + err.Error())
+					continue
 				}
 
 				args[requestBodyArgName] = &graphql.ArgumentConfig{ // should be astraction, with simple data definition, not argument config
-					Type:        graphqlType,
+					Type:        def.InputGraphqlType,
 					Description: description,
 				}
-				/*
-					type DataDefinition struct {
-						Name        string      `json:"name"`
-						GraphqlArgumentConfig  graphql.ArgumentConfig `json:"graphql_argument"`
-						Fields      interface{} `json:"fields"`
-						GraphqlType
-						Schema
-						Type
-						Required ...
-					}
-				*/
 			}
 
-			fieldType := typebuilder.GetGraphQLType(public, content.Schema, usedOT, false, false)
+			schemaNames := typebuilder.SchemaNames{
+				FromSchema: content.Schema.Value.Title,
+				FromRef:    utils.GetRefName(content.Schema.Ref),
+				FromPath:   utils.InferResourceNameFromPath(path),
+			}
+
+			def := typebuilder.CreateDataDefinition(public, content.Schema, schemaNames, path, false)
 			resolver := getResolver(serverUrl+path, method, argToParam, requestBodyArgName)
 			field := &graphql.Field{
 				Name:        operationName,
 				Description: operation.Description,
 				Args:        args,
-				Type:        fieldType,
+				Type:        def.GraphqlType,
 				Resolve:     resolver,
 			}
 
@@ -196,7 +207,7 @@ func getResolver(path string, httpMethod string, argToParam map[string]*openapi3
 		if err != nil {
 			return nil, err
 		}
-		request.Header.Set("Content-Type", "application/json") // could be another type, depends on DataDefinition..
+		request.Header.Set("Content-Type", "application/json")
 
 		response, err := client.Do(request)
 		if err != nil {
