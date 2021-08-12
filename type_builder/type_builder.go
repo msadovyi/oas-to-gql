@@ -1,6 +1,10 @@
 package typebuilder
 
 import (
+	"reflect"
+	"strconv"
+	"strings"
+
 	"github.com/getkin/kin-openapi/openapi3"
 	"github.com/graphql-go/graphql"
 
@@ -22,7 +26,8 @@ type DataDefinition struct {
 	SchemaRef                   *openapi3.SchemaRef
 	Schema                      *openapi3.Schema
 	Names                       SchemaNames
-	PreferredName               string
+	GraphQLTypeName             string
+	GraphQLInputTypeName        string
 	Type                        string
 	TargetGraphqlType           int
 	Required                    bool
@@ -37,14 +42,14 @@ type UsedOT map[string]graphql.Type // graphql.Type can be field of DataDefiniti
 var usedOT = make(UsedOT)
 
 func setUsedOT(def *DataDefinition) {
-	usedOT[def.GraphqlType.Name()] = def.GraphqlType
-	usedOT[def.InputGraphqlType.Name()] = def.InputGraphqlType
+	usedOT[def.GraphQLTypeName] = def.GraphqlType
+	usedOT[def.GraphQLInputTypeName] = def.InputGraphqlType
 }
 
 func assignGraphQLTypeToDefinition(def *DataDefinition) {
-	if usedOT[def.PreferredName] != nil {
-		def.GraphqlType = usedOT[def.PreferredName]
-		def.InputGraphqlType = usedOT[def.PreferredName+"Input"]
+	if usedOT[def.GraphQLTypeName] != nil {
+		def.GraphqlType = usedOT[def.GraphQLTypeName]
+		def.InputGraphqlType = usedOT[def.GraphQLInputTypeName]
 	} else if def.TargetGraphqlType == types.List {
 		assignGraphQLTypeToDefinition(def.ListItemDefinitions)
 
@@ -55,6 +60,11 @@ func assignGraphQLTypeToDefinition(def *DataDefinition) {
 	} else if def.TargetGraphqlType == types.Object {
 		def.GraphqlType = assignOt(def)
 		def.InputGraphqlType = assignInputOt(def)
+
+		setUsedOT(def)
+	} else if def.TargetGraphqlType == types.Enum {
+		def.GraphqlType = assignEnum(def)
+		def.InputGraphqlType = def.GraphqlType
 
 		setUsedOT(def)
 	} else if def.TargetGraphqlType == types.String {
@@ -78,25 +88,29 @@ func assignGraphQLTypeToDefinition(def *DataDefinition) {
 }
 
 func CreateDataDefinition(oas *openapi3.T, schemaRef *openapi3.SchemaRef, schemaNames SchemaNames, path string, required bool) *DataDefinition {
-	preferredName := GetPreferredName(schemaNames)
+	preferredName := getPreferredName(schemaNames)
+	availableName := getAvailableName(preferredName, preferredName, schemaRef.Value, 1)
 
-	if defs[preferredName] != nil {
-		return defs[preferredName]
+	if defs[availableName] != nil {
+		return defs[availableName]
 	}
 
 	def := DataDefinition{
-		Path:              path,
-		OAS:               oas,
-		SchemaRef:         schemaRef,
-		Schema:            schemaRef.Value,
-		Names:             schemaNames,
-		PreferredName:     preferredName,
-		Required:          required,
-		TargetGraphqlType: getTargetGraphqlType(schemaRef.Value),
-		Type:              schemaRef.Value.Type,
+		Path:                 path,
+		OAS:                  oas,
+		SchemaRef:            schemaRef,
+		Schema:               schemaRef.Value,
+		Names:                schemaNames,
+		GraphQLTypeName:      availableName,
+		GraphQLInputTypeName: availableName + "Input",
+		Required:             schemaRef.Value.Nullable || required,
+		TargetGraphqlType:    getTargetGraphqlType(schemaRef.Value),
+		Type:                 schemaRef.Value.Type,
 	}
 
-	defs[preferredName] = &def
+	if len(availableName) > 0 {
+		defs[availableName] = &def
+	}
 
 	if def.TargetGraphqlType == types.List {
 		names := SchemaNames{
@@ -138,7 +152,9 @@ func CreateDataDefinition(oas *openapi3.T, schemaRef *openapi3.SchemaRef, schema
 
 func getTargetGraphqlType(schema *openapi3.Schema) int {
 	targetType := types.Unknown
-	if len(schema.AllOf) > 0 || schema.Type == "object" {
+	if len(schema.Enum) > 0 {
+		targetType = types.Enum
+	} else if len(schema.AllOf) > 0 || schema.Type == "object" {
 		targetType = types.Object
 	} else if schema.Type == "array" {
 		targetType = types.List
@@ -155,10 +171,28 @@ func getTargetGraphqlType(schema *openapi3.Schema) int {
 	return targetType
 }
 
+func assignEnum(def *DataDefinition) graphql.Type {
+	enumConfigMap := graphql.EnumValueConfigMap{}
+
+	for _, v := range def.Schema.Enum {
+		value := utils.CastToString(v)
+		if len(value) > 0 {
+			enumConfigMap[strings.ToUpper(value)] = &graphql.EnumValueConfig{
+				Value: value,
+			}
+		}
+	}
+
+	return graphql.NewEnum(graphql.EnumConfig{
+		Name:   def.GraphQLTypeName,
+		Values: enumConfigMap,
+	})
+}
+
 func assignOt(def *DataDefinition) graphql.Type {
 	return graphql.NewObject(
 		graphql.ObjectConfig{
-			Name: def.PreferredName,
+			Name: def.GraphQLTypeName,
 			Fields: graphql.FieldsThunk(func() graphql.Fields {
 				fields := graphql.Fields{}
 				for fieldName, p := range def.ObjectPropertiesDefinitions {
@@ -174,7 +208,7 @@ func assignOt(def *DataDefinition) graphql.Type {
 func assignInputOt(def *DataDefinition) graphql.Type {
 	return graphql.NewInputObject(
 		graphql.InputObjectConfig{
-			Name: def.PreferredName + "Input",
+			Name: def.GraphQLInputTypeName,
 			Fields: graphql.InputObjectConfigFieldMapThunk(
 				func() graphql.InputObjectConfigFieldMap {
 					fields := graphql.InputObjectConfigFieldMap{}
@@ -188,7 +222,7 @@ func assignInputOt(def *DataDefinition) graphql.Type {
 	)
 }
 
-func GetPreferredName(names SchemaNames) string {
+func getPreferredName(names SchemaNames) string {
 	preferredName := ""
 
 	if len(names.FromRef) > 0 {
@@ -200,4 +234,21 @@ func GetPreferredName(names SchemaNames) string {
 	}
 
 	return utils.ToPascalCase(preferredName)
+}
+
+// Returns available name of gql type. If type already exists returns preferredName + "i"
+func getAvailableName(preferredName string, previousName string, schema *openapi3.Schema, i int) string {
+	if defs[preferredName] != nil {
+		// if schemas are deep equal reuse name
+		if reflect.DeepEqual(defs[preferredName].Schema, schema) {
+			return preferredName
+		} else {
+			i += 1
+			// add number to the end of string and check again. We need previous name to do not mutate current
+			preferredName = previousName + strconv.Itoa(i)
+			return getAvailableName(preferredName, previousName, schema, i)
+		}
+	} else {
+		return preferredName
+	}
 }

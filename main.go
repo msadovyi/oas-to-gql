@@ -232,14 +232,14 @@ func getResolver(path string, httpMethod string, argToParam map[string]*openapi3
 
 		json.Unmarshal(responseBody, &jsonData)
 
-		text := string(responseBody) // have to check response header
+		textData := string(responseBody) // have to check response header
 
 		var data interface{}
 
 		if jsonData != nil {
 			data = jsonData
 		} else {
-			data = text
+			data = textData
 		}
 
 		if response.StatusCode >= 400 {

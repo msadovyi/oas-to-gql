@@ -39,7 +39,7 @@ app.get('/pets', function (req, res) {
 })
 
 app.get('/pets/:id', function (req, res) {
-  pet = pets.find((p) => p.id === req.params.id)
+  const pet = pets[req.params.id - 1]
   if (!pet) {
     return sendBadUserInput(res, { message: "Pet not found", "id": req.params.id });
   }
@@ -51,8 +51,7 @@ app.put('/pets/:id', function (req, res) {
   if (!body || !body.name) {
     return sendBadUserInput(res, { message: "Pet should have name", body });
   }
-
-  pet = pets.find((p) => p.id === params.id)
+  const pet = pets[params.id - 1]
   if (!pet) {
     return sendBadUserInput(res, { message: "Pet not found", "id": req.params.id });
   }
@@ -63,11 +62,10 @@ app.put('/pets/:id', function (req, res) {
 
 app.delete('/pets/:id', function (req, res) {
   const id = req.params.id;
-  if (!pets[id]) {
+  if (!pets[id - 1]) {
     return sendBadUserInput(res, { message: "Pet not found", "id": req.params.id });
   }
-
-  pets.splice(id, 1);
+  pets.splice(id - 1, 1);
   res.statusCode = 204
   res.end();
 })

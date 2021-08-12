@@ -58,6 +58,16 @@
         "operationId": "findPets",
         "parameters": [
           {
+            "name": "sort",
+            "in": "query",
+            "description": "Sort order",
+            "schema": {
+              "nullable": false,
+              "enum": ["asc", "desc"],
+              "type": "string"
+            }
+          },
+          {
             "name": "tags",
             "in": "query",
             "description": "tags to filter by",
@@ -151,6 +161,16 @@
         "operationId": "updatePet",
         "parameters": [
           {
+            "name": "sort",
+            "in": "query",
+            "description": "Sort order",
+            "schema": {
+              "nullable": false,
+              "enum": ["asc", "desc", "third_option"],
+              "type": "string"
+            }
+          },
+          {
             "name": "id",
             "in": "path",
             "description": "ID of pet to update",
@@ -197,6 +217,16 @@
             "schema": {
               "type": "integer",
               "format": "int64"
+            }
+          },
+          {
+            "name": "sort",
+            "in": "query",
+            "description": "Sort order",
+            "schema": {
+              "nullable": false,
+              "enum": ["asc", "desc", "third_option"],
+              "type": "string"
             }
           }
         ],
