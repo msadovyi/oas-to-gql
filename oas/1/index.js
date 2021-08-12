@@ -1,13 +1,9 @@
 const express = require('express')
-const bodyParser = require('body-parser')
 const app = express()
 
 
-const jsonParser = bodyParser.json()
-const urlencodedParser = bodyParser.urlencoded({ extended: false })
-
-app.use(jsonParser);
-app.use(urlencodedParser);
+app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
 
 const pets = [{
   id: "1",
@@ -79,6 +75,10 @@ app.post('/pets', function (req, res) {
 
   pets.push(pet);
   res.json(pet);
+})
+
+app.post('/urlencoded', function (req, res) {
+  res.json(req.body);
 })
 
 app.get('/nestedReferenceInParameter', function (req, res) {

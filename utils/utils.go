@@ -6,6 +6,8 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 
 	pluralize "github.com/gertd/go-pluralize"
 	"github.com/getkin/kin-openapi/openapi3"
@@ -37,6 +39,20 @@ func ToPascalCase(s string) string {
 	return strings.Join(g, "")
 }
 
+func ToCamelCase(s string) string {
+	pascalCase := ToPascalCase(s)
+
+	return LowerFirst(pascalCase)
+}
+
+func LowerFirst(s string) string {
+	if s == "" {
+		return ""
+	}
+	r, n := utf8.DecodeRuneInString(s)
+	return string(unicode.ToLower(r)) + s[n:]
+}
+
 func Sanitize(s string) (string, error) {
 	reg, err := regexp.Compile("[^a-zA-Z0-9]+")
 	if err != nil {
@@ -59,11 +75,11 @@ func Serialize(data interface{}, key string) string {
 	switch data.(type) {
 	// Should we cover another cases?
 	case string:
-		return key + "=" + data.(string)
+		return key + "=" + CastToString(data)
 	case bool:
-		return key + "=" + strconv.FormatBool(data.(bool))
+		return key + "=" + CastToString(data)
 	case int:
-		return key + "=" + strconv.Itoa(data.(int))
+		return key + "=" + CastToString(data)
 	case []interface{}:
 		arr := data.([]interface{})
 		result := []string{}

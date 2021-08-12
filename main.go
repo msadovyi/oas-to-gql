@@ -1,12 +1,10 @@
 package main
 
 import (
-	"bytes"
 	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
-	"io"
 	"io/ioutil"
 	"log"
 	"net/http"
@@ -15,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 
+	"openapi-to-graphql/oas_utils"
 	typebuilder "openapi-to-graphql/type_builder"
 	"openapi-to-graphql/types"
 	"openapi-to-graphql/utils"
@@ -74,7 +73,7 @@ func translateToSchemaConfig(public *openapi3.T) graphql.SchemaConfig {
 			if len(operationName) == 0 {
 				operationName = utils.InferResourceNameFromPath(path)
 			}
-			operationName = utils.ToPascalCase(operationName)
+			operationName = utils.ToCamelCase(operationName)
 
 			httpMethod, err := types.GetHttpMethod(method)
 			if err != nil {
@@ -88,7 +87,7 @@ func translateToSchemaConfig(public *openapi3.T) graphql.SchemaConfig {
 				continue
 			}
 
-			content, err := getResponseContent(response)
+			responseContent, err := getResponseContent(response)
 			if err != nil {
 				log.Print("Skipping " + operationName + "." + err.Error())
 				continue
@@ -105,11 +104,11 @@ func translateToSchemaConfig(public *openapi3.T) graphql.SchemaConfig {
 
 			for _, parameter := range operation.Parameters {
 				p := parameter.Value
-				name := p.Name
+				name := utils.ToCamelCase(p.Name)
 				description := p.Description
 
-				names := typebuilder.SchemaNames{
-					FromSchema: p.Name,
+				names := types.SchemaNames{
+					FromSchema: name,
 				}
 				schema := p.Schema
 				if schema == nil {
@@ -129,46 +128,47 @@ func translateToSchemaConfig(public *openapi3.T) graphql.SchemaConfig {
 				argToParam[name] = parameter
 			}
 
-			var requestBodyArgName string
+			var requestContentDefinition types.RequestBodyDefinition
 			requestBody := operation.RequestBody
 
 			if requestBody != nil {
 				description := requestBody.Value.Description
 				required := requestBody.Value.Required
-				content, err := getRequestContent(*requestBody.Value)
+				requestContent, err := getRequestContent(*requestBody.Value)
 				if err != nil {
 					log.Print("Skipping " + operationName + "." + err.Error())
 					continue
 				}
 
-				schemaNames := typebuilder.SchemaNames{
-					FromSchema: content.Schema.Value.Title,
-					FromRef:    utils.GetRefName(content.Schema.Ref),
+				schemaNames := types.SchemaNames{
+					FromSchema: requestContent.Content.Schema.Value.Title,
+					FromRef:    utils.GetRefName(requestContent.Content.Schema.Ref),
 					FromPath:   utils.InferResourceNameFromPath(path),
 				}
 
-				def := typebuilder.CreateDataDefinition(public, content.Schema, schemaNames, path, required)
+				def := typebuilder.CreateDataDefinition(public, requestContent.Content.Schema, schemaNames, path, required)
 
-				requestBodyArgName, err = utils.Sanitize(def.InputGraphqlType.Name())
-				if err != nil {
-					log.Print("Skipping " + operationName + "." + err.Error())
-					continue
-				}
+				argumentName := utils.ToCamelCase(def.GraphQLInputTypeName)
 
-				args[requestBodyArgName] = &graphql.ArgumentConfig{ // should be astraction, with simple data definition, not argument config
+				args[argumentName] = &graphql.ArgumentConfig{ // should be astraction, with simple data definition, not argument config
 					Type:        def.InputGraphqlType,
 					Description: description,
 				}
+				requestContentDefinition = types.RequestBodyDefinition{
+					ContentType:    requestContent.ContentType,
+					ArgumentName:   argumentName,
+					DataDefinition: def,
+				}
 			}
 
-			schemaNames := typebuilder.SchemaNames{
-				FromSchema: content.Schema.Value.Title,
-				FromRef:    utils.GetRefName(content.Schema.Ref),
+			schemaNames := types.SchemaNames{
+				FromSchema: responseContent.Schema.Value.Title,
+				FromRef:    utils.GetRefName(responseContent.Schema.Ref),
 				FromPath:   utils.InferResourceNameFromPath(path),
 			}
 
-			def := typebuilder.CreateDataDefinition(public, content.Schema, schemaNames, path, false)
-			resolver := getResolver(serverUrl+path, method, argToParam, requestBodyArgName)
+			def := typebuilder.CreateDataDefinition(public, responseContent.Schema, schemaNames, path, false)
+			resolver := getResolver(serverUrl+path, method, argToParam, &requestContentDefinition)
 			field := &graphql.Field{
 				Name:        operationName,
 				Description: operation.Description,
@@ -200,22 +200,25 @@ func translateToSchemaConfig(public *openapi3.T) graphql.SchemaConfig {
 	}
 }
 
-func getResolver(path string, httpMethod string, argToParam map[string]*openapi3.ParameterRef, requestBodyArgName string) func(p graphql.ResolveParams) (interface{}, error) {
+func getResolver(path string, httpMethod string, argToParam map[string]*openapi3.ParameterRef, requestBodyDef *types.RequestBodyDefinition) func(p graphql.ResolveParams) (interface{}, error) {
 	return func(p graphql.ResolveParams) (interface{}, error) {
 		endpoint := extractRequestDataFromArgs(p, path, httpMethod, argToParam)
 
-		requestBodyValue := p.Args[requestBodyArgName]
-		var body io.Reader
+		requestBodyValue := p.Args[requestBodyDef.ArgumentName]
 
-		if requestBodyValue != nil {
-			body = marshalRequestBody(requestBodyValue)
+		body := oas_utils.Body{
+			ContentType: requestBodyDef.ContentType,
+			Data:        requestBodyValue,
 		}
 
-		request, err := http.NewRequest(strings.ToUpper(httpMethod), endpoint, body)
+		request, err := http.NewRequest(strings.ToUpper(httpMethod), endpoint, body.Encode())
 		if err != nil {
 			return nil, err
 		}
-		request.Header.Set("Content-Type", "application/json")
+
+		if requestBodyDef != nil {
+			request.Header.Set("Content-Type", requestBodyDef.ContentType)
+		}
 
 		response, err := client.Do(request)
 		if err != nil {
@@ -232,14 +235,14 @@ func getResolver(path string, httpMethod string, argToParam map[string]*openapi3
 
 		json.Unmarshal(responseBody, &jsonData)
 
-		textData := string(responseBody) // have to check response header
+		text := string(responseBody) // have to check response header
 
 		var data interface{}
 
 		if jsonData != nil {
 			data = jsonData
 		} else {
-			data = textData
+			data = text
 		}
 
 		if response.StatusCode >= 400 {
@@ -267,13 +270,13 @@ func getResponseContent(
 	response openapi3.ResponseRef,
 ) (openapi3.MediaType, error) {
 	for name, content := range response.Value.Content {
-		if name == "application/json" && content != nil {
+		if name == "application/json" && content.Schema != nil {
 			return *content, nil
 		}
-		if name == "text/plain" && content != nil {
+		if name == "text/plain" && content.Schema != nil {
 			return *content, nil
 		}
-		if name == "text/html" && content != nil {
+		if name == "text/html" && content.Schema != nil {
 			return *content, nil
 		}
 	}
@@ -282,13 +285,16 @@ func getResponseContent(
 
 func getRequestContent(
 	request openapi3.RequestBody,
-) (openapi3.MediaType, error) {
+) (types.RequestContent, error) {
 	for name, content := range request.Content {
-		if name == "application/json" && content != nil {
-			return *content, nil
+		if name == "application/json" && content.Schema != nil {
+			return types.RequestContent{ContentType: name, Content: *content}, nil
+		}
+		if name == "application/x-www-form-urlencoded" && content.Schema != nil {
+			return types.RequestContent{ContentType: name, Content: *content}, nil
 		}
 	}
-	return openapi3.MediaType{}, errors.New("request content not found")
+	return types.RequestContent{}, errors.New("request content not found")
 }
 
 func extractRequestDataFromArgs(p graphql.ResolveParams, path string, httpMethod string, argToParam map[string]*openapi3.ParameterRef) string {
@@ -320,13 +326,4 @@ func extractRequestDataFromArgs(p graphql.ResolveParams, path string, httpMethod
 	}
 
 	return endpoint
-}
-
-func marshalRequestBody(data interface{}) io.Reader {
-	var jsonStr, err = json.Marshal(data)
-	if err != nil {
-		panic(err)
-	}
-
-	return bytes.NewBuffer([]byte(jsonStr))
 }
