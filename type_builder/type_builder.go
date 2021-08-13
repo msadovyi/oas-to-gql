@@ -66,7 +66,7 @@ func assignGraphQLTypeToDefinition(def *types.DataDefinition) {
 
 func CreateDataDefinition(oas *openapi3.T, schemaRef *openapi3.SchemaRef, schemaNames types.SchemaNames, path string, required bool) *types.DataDefinition {
 	preferredName := getPreferredName(schemaNames)
-	availableName := getAvailableName(preferredName, preferredName, schemaRef.Value, 1)
+	availableName := getAvailableTypeName(preferredName, preferredName, schemaRef.Value, 1)
 
 	if defs[availableName] != nil {
 		return defs[availableName]
@@ -217,7 +217,7 @@ func getPreferredName(names types.SchemaNames) string {
 }
 
 // Returns available name of gql type. If type already exists returns preferredName + "i"
-func getAvailableName(preferredName string, previousName string, schema *openapi3.Schema, i int) string {
+func getAvailableTypeName(preferredName string, previousName string, schema *openapi3.Schema, i int) string {
 	if defs[preferredName] != nil {
 		// if schemas are deep equal reuse name
 		if reflect.DeepEqual(defs[preferredName].Schema, schema) {
@@ -226,7 +226,7 @@ func getAvailableName(preferredName string, previousName string, schema *openapi
 			i += 1
 			// add number to the end of string and check again. We need previous name to do not mutate current
 			preferredName = previousName + strconv.Itoa(i)
-			return getAvailableName(preferredName, previousName, schema, i)
+			return getAvailableTypeName(preferredName, previousName, schema, i)
 		}
 	} else {
 		return preferredName
