@@ -36,7 +36,7 @@ func ToPascalCase(s string) string {
 	for _, value := range p {
 		g = append(g, strings.Title(value))
 	}
-	return strings.Join(g, "")
+	return Sanitize(strings.Join(g, ""))
 }
 
 func ToCamelCase(s string) string {
@@ -53,12 +53,9 @@ func LowerFirst(s string) string {
 	return string(unicode.ToLower(r)) + s[n:]
 }
 
-func Sanitize(s string) (string, error) {
-	reg, err := regexp.Compile("[^a-zA-Z0-9]+")
-	if err != nil {
-		return "", fmt.Errorf("cannot sanitize string: %v", s)
-	}
-	return reg.ReplaceAllString(s, ""), nil
+func Sanitize(s string) string {
+	reg := regexp.MustCompile("[^a-zA-Z0-9]+")
+	return reg.ReplaceAllString(s, "")
 }
 
 func GetServerUrl(oas *openapi3.T) string {

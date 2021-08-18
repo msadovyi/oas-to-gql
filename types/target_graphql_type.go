@@ -9,4 +9,6 @@ const (
 	Float
 	Boolean
 	Unknown
+	JSON
+	Union
 )

@@ -7,6 +7,9 @@ import (
 
 	"github.com/getkin/kin-openapi/openapi3"
 	"github.com/graphql-go/graphql"
+	"github.com/graphql-go/graphql/language/ast"
+	"github.com/graphql-go/graphql/language/kinds"
+	"github.com/jinzhu/copier"
 
 	types "openapi-to-graphql/types"
 	"openapi-to-graphql/utils"
@@ -19,53 +22,64 @@ type UsedOT map[string]graphql.Type // graphql.Type can be field of types.DataDe
 var usedOT = make(UsedOT)
 
 func setUsedOT(def *types.DataDefinition) {
-	usedOT[def.GraphQLTypeName] = def.GraphqlType
-	usedOT[def.GraphQLInputTypeName] = def.InputGraphqlType
+	usedOT[def.GraphQLTypeName] = def.GraphQLType
+	usedOT[def.GraphQLInputTypeName] = def.InputGraphQLType
 }
 
 func assignGraphQLTypeToDefinition(def *types.DataDefinition) {
 	if usedOT[def.GraphQLTypeName] != nil {
-		def.GraphqlType = usedOT[def.GraphQLTypeName]
-		def.InputGraphqlType = usedOT[def.GraphQLInputTypeName]
-	} else if def.TargetGraphqlType == types.List {
+		def.GraphQLType = usedOT[def.GraphQLTypeName]
+		def.InputGraphQLType = usedOT[def.GraphQLInputTypeName]
+	} else if def.TargetGraphQLType == types.List {
 		assignGraphQLTypeToDefinition(def.ListItemDefinitions)
 
-		def.GraphqlType = graphql.NewList(def.ListItemDefinitions.GraphqlType)
-		def.InputGraphqlType = graphql.NewList(def.ListItemDefinitions.InputGraphqlType)
-
+		def.GraphQLType = graphql.NewList(def.ListItemDefinitions.GraphQLType)
+		def.InputGraphQLType = graphql.NewList(def.ListItemDefinitions.InputGraphQLType)
 		setUsedOT(def.ListItemDefinitions)
-	} else if def.TargetGraphqlType == types.Object {
-		def.GraphqlType = assignOt(def)
-		def.InputGraphqlType = assignInputOt(def)
-
+	} else if def.TargetGraphQLType == types.Object {
+		def.GraphQLType = assignOt(def)
+		def.InputGraphQLType = assignInputOt(def)
 		setUsedOT(def)
-	} else if def.TargetGraphqlType == types.Enum {
-		def.GraphqlType = assignEnum(def)
-		def.InputGraphqlType = def.GraphqlType
-
+	} else if def.TargetGraphQLType == types.Enum {
+		def.GraphQLType = assignEnum(def)
+		def.InputGraphQLType = def.GraphQLType
 		setUsedOT(def)
-	} else if def.TargetGraphqlType == types.String {
-		def.GraphqlType = graphql.String
-		def.InputGraphqlType = graphql.String
-	} else if def.TargetGraphqlType == types.Integer {
-		def.GraphqlType = graphql.Int
-		def.InputGraphqlType = graphql.Int
-	} else if def.TargetGraphqlType == types.Float {
-		def.GraphqlType = graphql.Float
-		def.InputGraphqlType = graphql.Float
-	} else if def.TargetGraphqlType == types.Boolean {
-		def.GraphqlType = graphql.Boolean
-		def.InputGraphqlType = graphql.Boolean
+	} else if def.TargetGraphQLType == types.Union {
+		def.GraphQLType = assignUnion(def)
+		// input type cannot be union
+		def.InputGraphQLType = JSONScalar
+		setUsedOT(def)
+	} else if def.TargetGraphQLType == types.JSON {
+		def.GraphQLType = JSONScalar
+		def.InputGraphQLType = JSONScalar
+	} else if def.TargetGraphQLType == types.String {
+		def.GraphQLType = graphql.String
+		def.InputGraphQLType = graphql.String
+	} else if def.TargetGraphQLType == types.Integer {
+		def.GraphQLType = graphql.Int
+		def.InputGraphQLType = graphql.Int
+	} else if def.TargetGraphQLType == types.Float {
+		def.GraphQLType = graphql.Float
+		def.InputGraphQLType = graphql.Float
+	} else if def.TargetGraphQLType == types.Boolean {
+		def.GraphQLType = graphql.Boolean
+		def.InputGraphQLType = graphql.Boolean
 	}
 
 	if def.Required {
-		def.GraphqlType = graphql.NewNonNull(def.GraphqlType)
-		def.InputGraphqlType = graphql.NewNonNull(def.InputGraphqlType)
+		def.GraphQLType = graphql.NewNonNull(def.GraphQLType)
+		def.InputGraphQLType = graphql.NewNonNull(def.InputGraphQLType)
 	}
 }
 
 func CreateDataDefinition(oas *openapi3.T, schemaRef *openapi3.SchemaRef, schemaNames types.SchemaNames, path string, required bool) *types.DataDefinition {
 	preferredName := getPreferredName(schemaNames)
+	targetGraphQLType := getTargetGraphQLType(schemaRef.Value)
+
+	if targetGraphQLType == types.Union {
+		preferredName += "Union"
+	}
+
 	availableName := getAvailableTypeName(preferredName, preferredName, schemaRef.Value, 1)
 
 	if defs[availableName] != nil {
@@ -81,24 +95,23 @@ func CreateDataDefinition(oas *openapi3.T, schemaRef *openapi3.SchemaRef, schema
 		GraphQLTypeName:      availableName,
 		GraphQLInputTypeName: availableName + "Input",
 		Required:             schemaRef.Value.Nullable || required,
-		TargetGraphqlType:    getTargetGraphqlType(schemaRef.Value),
+		TargetGraphQLType:    targetGraphQLType,
 		Type:                 schemaRef.Value.Type,
 	}
 
-	if len(availableName) > 0 {
+	if len(availableName) > 0 && (targetGraphQLType == types.Object || targetGraphQLType == types.Union || targetGraphQLType == types.Enum || targetGraphQLType == types.List) {
 		defs[availableName] = &def
 	}
 
-	if def.TargetGraphqlType == types.List {
+	if targetGraphQLType == types.List {
 		names := types.SchemaNames{
 			FromRef: utils.GetRefName(schemaRef.Value.Items.Ref),
 		}
 		subDef := CreateDataDefinition(oas, schemaRef.Value.Items, names, path, false)
 		def.ListItemDefinitions = subDef
-	} else if def.TargetGraphqlType == types.Object {
+	} else if targetGraphQLType == types.Object {
 		objectDefinitions := make(map[string]*types.DataDefinition)
 		schemas := make([]*openapi3.SchemaRef, 0)
-
 		schemas = append(schemas, schemaRef)
 
 		if schemaRef.Value.AllOf != nil && len(schemaRef.Value.AllOf) > 0 {
@@ -123,6 +136,8 @@ func CreateDataDefinition(oas *openapi3.T, schemaRef *openapi3.SchemaRef, schema
 		}
 
 		def.ObjectPropertiesDefinitions = objectDefinitions
+	} else if targetGraphQLType == types.Union {
+		def.UnionDefinitions = createUnionDefinitions(oas, schemaRef, schemaNames, path, required)
 	}
 
 	assignGraphQLTypeToDefinition(&def)
@@ -130,9 +145,52 @@ func CreateDataDefinition(oas *openapi3.T, schemaRef *openapi3.SchemaRef, schema
 	return &def
 }
 
-func getTargetGraphqlType(schema *openapi3.Schema) int {
+func createUnionDefinitions(oas *openapi3.T, schemaRef *openapi3.SchemaRef, schemaNames types.SchemaNames, path string, required bool) []*types.DataDefinition {
+	schemaWithoutOneOf := &openapi3.SchemaRef{}
+	copier.Copy(&schemaWithoutOneOf, &schemaRef)
+	schemaWithoutOneOf.Value.OneOf = nil
+
+	definitions := make([]*types.DataDefinition, 0)
+	baseDefinition := CreateDataDefinition(oas, schemaWithoutOneOf, schemaNames, path, required)
+
+	if baseDefinition.GraphQLType != nil {
+		definitions = append(definitions, baseDefinition)
+	}
+
+	for _, oneOfSchema := range schemaRef.Value.OneOf {
+		names := types.SchemaNames{
+			FromRef:    utils.GetRefName(oneOfSchema.Ref),
+			FromSchema: oneOfSchema.Value.Title,
+			FromPath:   path,
+		}
+		memberTypeDefinition := CreateDataDefinition(oas, oneOfSchema, names, path, required)
+		if memberTypeDefinition.GraphQLType != nil {
+			definitions = append(definitions, memberTypeDefinition)
+		}
+	}
+
+	return definitions
+}
+
+func getTargetGraphQLType(schema *openapi3.Schema) int {
 	targetType := types.Unknown
-	if len(schema.Enum) > 0 {
+
+	if len(schema.AllOf) > 0 && len(schema.OneOf) > 0 {
+		targetType = types.JSON
+	} else if len(schema.OneOf) > 0 {
+		schemaWithoutOneOf := openapi3.Schema{}
+		copier.Copy(&schemaWithoutOneOf, &schema)
+		schemaWithoutOneOf.OneOf = nil
+
+		baseType := getTargetGraphQLType(&schemaWithoutOneOf)
+
+		memberSchemas := make([]*openapi3.Schema, 0)
+		for _, member := range schema.OneOf {
+			memberSchemas = append(memberSchemas, member.Value)
+		}
+
+		targetType = getOneOfTargetGraphQLType(&baseType, memberSchemas)
+	} else if len(schema.Enum) > 0 {
 		targetType = types.Enum
 	} else if len(schema.AllOf) > 0 || schema.Type == "object" {
 		targetType = types.Object
@@ -146,9 +204,80 @@ func getTargetGraphqlType(schema *openapi3.Schema) int {
 		targetType = types.Float
 	} else if schema.Type == "boolean" {
 		targetType = types.Boolean
+	} else {
+		targetType = types.JSON
 	}
 
 	return targetType
+}
+
+func getOneOfTargetGraphQLType(baseType *int, schemas []*openapi3.Schema) int {
+	if len(schemas) == 0 {
+		return *baseType
+	}
+
+	var memberTypes []int
+
+	for _, schema := range schemas {
+		memberType := getTargetGraphQLType(schema)
+		memberTypes = append(memberTypes, memberType)
+	}
+
+	// if member types are different - it's json
+	firstType := memberTypes[0]
+	for _, t := range memberTypes {
+		if firstType != t {
+			return types.JSON
+		}
+	}
+
+	if *baseType != types.Unknown {
+		if *baseType != firstType {
+			return types.JSON
+		} else if *baseType == firstType && *baseType == types.Object {
+			return types.Union
+		}
+	}
+	if firstType == types.Object {
+		return types.Union
+	} else {
+		return firstType
+	}
+}
+
+func assignUnion(def *types.DataDefinition) graphql.Type {
+	objectTypes := make([]*graphql.Object, 0)
+	for _, d := range def.UnionDefinitions {
+		objectTypes = append(objectTypes, d.GraphQLObject)
+	}
+	def.GraphQLType = graphql.NewUnion(graphql.UnionConfig{
+		Name:        def.GraphQLTypeName,
+		Description: def.Schema.Description,
+		Types:       objectTypes,
+		ResolveType: func(p graphql.ResolveTypeParams) *graphql.Object {
+			// check p.Value properties and find corresponding def.GraphQLObject
+
+			for _, d := range def.UnionDefinitions {
+				isTargetObjectType := true
+
+				for fieldName := range d.ObjectPropertiesDefinitions {
+					value := p.Value.(map[string]interface{})
+
+					if _, ok := value[fieldName]; !ok {
+						isTargetObjectType = false
+					}
+				}
+
+				if isTargetObjectType {
+					return d.GraphQLObject
+				}
+			}
+			// no GraphQLObject, returning nil equal to throwing gql error
+			return nil
+		},
+	})
+
+	return def.GraphQLType
 }
 
 func assignEnum(def *types.DataDefinition) graphql.Type {
@@ -170,19 +299,18 @@ func assignEnum(def *types.DataDefinition) graphql.Type {
 }
 
 func assignOt(def *types.DataDefinition) graphql.Type {
-	return graphql.NewObject(
-		graphql.ObjectConfig{
-			Name: def.GraphQLTypeName,
-			Fields: graphql.FieldsThunk(func() graphql.Fields {
-				fields := graphql.Fields{}
-				for fieldName, p := range def.ObjectPropertiesDefinitions {
-					assignGraphQLTypeToDefinition(p)
-					fields[fieldName] = &graphql.Field{Type: p.GraphqlType, Name: fieldName}
-				}
-				return fields
-			}),
-		},
-	)
+	def.GraphQLObject = graphql.NewObject(graphql.ObjectConfig{
+		Name: def.GraphQLTypeName,
+		Fields: graphql.FieldsThunk(func() graphql.Fields {
+			fields := graphql.Fields{}
+			for fieldName, p := range def.ObjectPropertiesDefinitions {
+				assignGraphQLTypeToDefinition(p)
+				fields[fieldName] = &graphql.Field{Type: p.GraphQLType, Name: fieldName}
+			}
+			return fields
+		}),
+	})
+	return def.GraphQLObject
 }
 
 func assignInputOt(def *types.DataDefinition) graphql.Type {
@@ -193,7 +321,7 @@ func assignInputOt(def *types.DataDefinition) graphql.Type {
 				func() graphql.InputObjectConfigFieldMap {
 					fields := graphql.InputObjectConfigFieldMap{}
 					for fieldName, p := range def.ObjectPropertiesDefinitions {
-						fields[fieldName] = &graphql.InputObjectFieldConfig{Type: p.InputGraphqlType}
+						fields[fieldName] = &graphql.InputObjectFieldConfig{Type: p.InputGraphQLType}
 					}
 					return fields
 				},
@@ -232,3 +360,47 @@ func getAvailableTypeName(preferredName string, previousName string, schema *ope
 		return preferredName
 	}
 }
+
+func parseLiteral(astValue ast.Value) interface{} {
+	kind := astValue.GetKind()
+
+	switch kind {
+	case kinds.StringValue:
+		return astValue.GetValue()
+	case kinds.BooleanValue:
+		return astValue.GetValue()
+	case kinds.IntValue:
+		return astValue.GetValue()
+	case kinds.FloatValue:
+		return astValue.GetValue()
+	case kinds.ObjectValue:
+		obj := make(map[string]interface{})
+		for _, v := range astValue.GetValue().([]*ast.ObjectField) {
+			obj[v.Name.Value] = parseLiteral(v.Value)
+		}
+		return obj
+	case kinds.ListValue:
+		list := make([]interface{}, 0)
+		for _, v := range astValue.GetValue().([]ast.Value) {
+			list = append(list, parseLiteral(v))
+		}
+		return list
+	default:
+		return nil
+	}
+}
+
+// JSON type
+var JSONScalar = graphql.NewScalar(
+	graphql.ScalarConfig{
+		Name:        "JSON",
+		Description: "The `JSON` scalar type represents JSON values as specified by [ECMA-404](http://www.ecma-international.org/publications/files/ECMA-ST/ECMA-404.pdf)",
+		Serialize: func(value interface{}) interface{} {
+			return value
+		},
+		ParseValue: func(value interface{}) interface{} {
+			return value
+		},
+		ParseLiteral: parseLiteral,
+	},
+)

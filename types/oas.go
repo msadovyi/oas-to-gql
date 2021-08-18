@@ -25,12 +25,14 @@ type DataDefinition struct {
 	GraphQLTypeName             string
 	GraphQLInputTypeName        string
 	Type                        string
-	TargetGraphqlType           int
+	TargetGraphQLType           int
 	Required                    bool
 	ObjectPropertiesDefinitions map[string]*DataDefinition
 	ListItemDefinitions         *DataDefinition
-	GraphqlType                 graphql.Type
-	InputGraphqlType            graphql.Type
+	UnionDefinitions            []*DataDefinition
+	GraphQLObject               *graphql.Object
+	GraphQLType                 graphql.Type
+	InputGraphQLType            graphql.Type
 }
 
 type SchemaNames struct {

@@ -21,6 +21,96 @@
     }
   ],
   "paths": {
+    "/no-response-schema": {
+      "get": {
+        "responses": {
+          "200": {
+            "description": "success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "description": "Should be translated to json",
+                  "example": {
+                    "key": "value"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/breeds": {
+      "post": {
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "oneOf": [
+                  {
+                    "type": "object",
+                    "properties": {
+                      "dogBreed": {
+                        "type": "string"
+                      }
+                    }
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "catBreed": {
+                        "type": "string"
+                      }
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "title": "basic one of test",
+                  "type": "object",
+                  "properties": {
+                    "anotherProperty": {
+                      "type": "number"
+                    }
+                  },
+                  "oneOf": [
+                    {
+                      "title": "dog member",
+                      "type": "object",
+                      "properties": {
+                        "dogBreed": {
+                          "type": "string"
+                        }
+                      }
+                    },
+                    {
+                      "title": "cat member",
+                      "type": "object",
+                      "properties": {
+                        "catBreed": {
+                          "type": "string"
+                        }
+                      }
+                    },
+                    {
+                      "$ref": "#/components/schemas/NewPet"
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/nestedReferenceInParameter": {
       "get": {
         "description": "Resolve a nested reference in the parameter schema",
